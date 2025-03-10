@@ -135,11 +135,13 @@ class MultiTaskCumulativeLinkLoss(nn.Module):
     def __init__(
         self,
         n_tasks: int,
+        loss_reduction: str = 'mean',
         task_reduction: str = "elementwise_mean",
         class_weights: Optional[List[torch.Tensor]] = None,
     ) -> None:
         super().__init__()
         self.n_tasks = n_tasks
+        self.loss_reduction = loss_reduction
         self.class_weights = class_weights
         self.task_reduction = task_reduction
 
@@ -165,11 +167,14 @@ class MultiTaskCumulativeLinkLoss(nn.Module):
             [
                 cumulative_link_loss(
                     y_preds[task_num],
-                    y_true[:, task_num],
+                    y_true[:, task_num].unsqueeze(1),
                     reduction=self.task_reduction,
                     class_weights=self.class_weights,
                 )
                 for task_num in range(self.n_tasks)
             ]
         )
-        return loss.sum()
+        if self.loss_reduction == 'mean':
+            return loss.mean()
+        elif self.loss_reduction == 'sum':
+            return loss.sum()
