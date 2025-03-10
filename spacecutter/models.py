@@ -1,3 +1,4 @@
+from typing import Dict, List
 from copy import deepcopy
 
 import torch
@@ -18,24 +19,20 @@ class LogisticCumulativeLink(nn.Module):
         - random : cutpoints are initialized with random values.
     """
 
-    def __init__(self, num_classes: int,
-                 init_cutpoints: str = 'ordered') -> None:
-        assert num_classes > 2, (
-            'Only use this model if you have 3 or more classes'
-        )
+    def __init__(self, num_classes: int, init_cutpoints: str = "ordered") -> None:
+        assert num_classes > 2, "Only use this model if you have 3 or more classes"
         super().__init__()
         self.num_classes = num_classes
         self.init_cutpoints = init_cutpoints
-        if init_cutpoints == 'ordered':
+        if init_cutpoints == "ordered":
             num_cutpoints = self.num_classes - 1
             cutpoints = torch.arange(num_cutpoints).float() - num_cutpoints / 2
             self.cutpoints = nn.Parameter(cutpoints)
-        elif init_cutpoints == 'random':
+        elif init_cutpoints == "random":
             cutpoints = torch.rand(self.num_classes - 1).sort()[0]
             self.cutpoints = nn.Parameter(cutpoints)
         else:
-            raise ValueError(f'{init_cutpoints} is not a valid init_cutpoints '
-                             f'type')
+            raise ValueError(f"{init_cutpoints} is not a valid init_cutpoints " f"type")
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
         """
@@ -44,12 +41,8 @@ class LogisticCumulativeLink(nn.Module):
         """
         sigmoids = torch.sigmoid(self.cutpoints - X)
         link_mat = sigmoids[:, 1:] - sigmoids[:, :-1]
-        link_mat = torch.cat((
-                sigmoids[:, [0]],
-                link_mat,
-                (1 - sigmoids[:, [-1]])
-            ),
-            dim=1
+        link_mat = torch.cat(
+            (sigmoids[:, [0]], link_mat, (1 - sigmoids[:, [-1]])), dim=1
         )
         return link_mat
 
@@ -70,13 +63,77 @@ class OrdinalLogisticModel(nn.Module):
         - random : cutpoints are initialized with random values.
     """
 
-    def __init__(self, predictor: nn.Module, num_classes: int,
-                 init_cutpoints: str = 'ordered') -> None:
+    def __init__(
+        self, predictor: nn.Module, num_classes: int, init_cutpoints: str = "ordered"
+    ) -> None:
         super().__init__()
         self.num_classes = num_classes
         self.predictor = deepcopy(predictor)
-        self.link = LogisticCumulativeLink(self.num_classes,
-                                           init_cutpoints=init_cutpoints)
+        self.link = LogisticCumulativeLink(
+            self.num_classes, init_cutpoints=init_cutpoints
+        )
 
     def forward(self, *args, **kwargs) -> torch.Tensor:
         return self.link(self.predictor(*args, **kwargs))
+
+
+class OrdinalLogisticMultiTaskModel(nn.Module):
+    """
+    "Wrapper" model for outputting proportional odds of ordinal classes.
+    Pass in any model that outputs a single prediction value, and this module
+    will then pass that model through the LogisticCumulativeLink module.
+
+    Parameters
+    ----------
+    backbone : nn.Module,
+        input_dim -> n_features
+        output_dim -> n_outputs
+    head: nn.Module
+        input_dim -> n_outputs
+        output_dim -> 1
+    n_classes: List[int]
+        number of classes in each task
+    init_cutpoints : str (default='ordered')
+        How to initialize the cutpoints of the model. Valid values are
+        - ordered : cutpoints are initialized to halfway between each class.
+        - random : cutpoints are initialized with random values.
+    """
+
+    def __init__(
+        self,
+        backbone: nn.Module,
+        head: nn.Module,
+        n_classes: List[int],
+        init_cutpoints: str = "ordered",
+    ) -> None:
+        super().__init__()
+        self.n_tasks = len(n_classes)
+        self.n_classes = n_classes
+        self.backbone = deepcopy(backbone)
+        self.heads = nn.ModuleList([])
+        for task_num in range(self.n_tasks):
+            self.heads.append(
+                nn.Sequential(
+                    deepcopy(head),
+                    LogisticCumulativeLink(
+                        self.n_classes[task_num], init_cutpoints=init_cutpoints
+                    ),
+                )
+            )
+
+    def forward(self, X: torch.Tensor) -> List[torch.Tensor]:
+        """forward pass.
+
+        Parameters
+        ----------
+        X : torch.Tensor
+            shape = (batch_size, n_features)
+
+        Returns
+        -------
+        List[torch.Tensor]
+            len = n_tasks
+            tensor.shape = batch_size, n_classes
+        """
+        out = self.backbone(X)
+        return [head(out) for head in self.heads]

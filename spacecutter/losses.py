@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 from torch import nn
-from typing import Optional
+from typing import Optional, List
 
 
 def _reduction(loss: torch.Tensor, reduction: str) -> torch.Tensor:
@@ -22,20 +22,22 @@ def _reduction(loss: torch.Tensor, reduction: str) -> torch.Tensor:
         Reduced loss.
 
     """
-    if reduction == 'elementwise_mean':
+    if reduction == "elementwise_mean":
         return loss.mean()
-    elif reduction == 'none':
+    elif reduction == "none":
         return loss
-    elif reduction == 'sum':
+    elif reduction == "sum":
         return loss.sum()
     else:
-        raise ValueError(f'{reduction} is not a valid reduction')
+        raise ValueError(f"{reduction} is not a valid reduction")
 
 
-def cumulative_link_loss(y_pred: torch.Tensor, y_true: torch.Tensor,
-                         reduction: str = 'elementwise_mean',
-                         class_weights: Optional[np.ndarray] = None
-                         ) -> torch.Tensor:
+def cumulative_link_loss(
+    y_pred: torch.Tensor,
+    y_true: torch.Tensor,
+    reduction: str = "elementwise_mean",
+    class_weights: Optional[np.ndarray] = None,
+) -> torch.Tensor:
     """
     Calculates the negative log likelihood using the logistic cumulative link
     function.
@@ -70,9 +72,11 @@ def cumulative_link_loss(y_pred: torch.Tensor, y_true: torch.Tensor,
 
     if class_weights is not None:
         # Make sure it's on the same device as neg_log_likelihood
-        class_weights = torch.as_tensor(class_weights,
-                                        dtype=neg_log_likelihood.dtype,
-                                        device=neg_log_likelihood.device)
+        class_weights = torch.as_tensor(
+            class_weights,
+            dtype=neg_log_likelihood.dtype,
+            device=neg_log_likelihood.device,
+        )
         neg_log_likelihood *= class_weights[y_true]
 
     loss = _reduction(neg_log_likelihood, reduction)
@@ -95,14 +99,77 @@ class CumulativeLinkLoss(nn.Module):
 
     """
 
-    def __init__(self, reduction: str = 'elementwise_mean',
-                 class_weights: Optional[torch.Tensor] = None) -> None:
+    def __init__(
+        self,
+        reduction: str = "elementwise_mean",
+        class_weights: Optional[torch.Tensor] = None,
+    ) -> None:
         super().__init__()
         self.class_weights = class_weights
         self.reduction = reduction
 
-    def forward(self, y_pred: torch.Tensor,
-                y_true: torch.Tensor) -> torch.Tensor:
-        return cumulative_link_loss(y_pred, y_true,
-                                    reduction=self.reduction,
-                                    class_weights=self.class_weights)
+    def forward(self, y_pred: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
+        return cumulative_link_loss(
+            y_pred, y_true, reduction=self.reduction, class_weights=self.class_weights
+        )
+
+
+class MultiTaskCumulativeLinkLoss(nn.Module):
+    """
+    Module form of cumulative_link_loss() loss function
+
+    Parameters
+    ----------
+    n_tasks: int
+        number of tasks
+    task_reduction : str
+        Method for reducing the loss each tasks separately. Options include 'elementwise_mean',
+        'none', and 'sum'.
+    class_weights : List[np.ndarray], [n_tasks, [num_classes]] optional (default=None)
+        Inner lists are weights for each class. Outer list is for each tasks. If included, then for each sample,
+        look up the true class and multiply that sample's loss by the weight in
+        this array.
+
+    """
+
+    def __init__(
+        self,
+        n_tasks: int,
+        task_reduction: str = "elementwise_mean",
+        class_weights: Optional[List[torch.Tensor]] = None,
+    ) -> None:
+        super().__init__()
+        self.n_tasks = n_tasks
+        self.class_weights = class_weights
+        self.task_reduction = task_reduction
+
+    def forward(
+        self, y_preds: List[torch.Tensor], y_true: torch.Tensor
+    ) -> torch.Tensor:
+        """forward pass
+
+        Parameters
+        ----------
+        y_preds : List[torch.Tensor]
+            len(y_preds) = n_tasks
+            y_preds.shape = (batch_size, n_classes)
+        y_true : torch.Tensor
+            y_true.shape = (batch_size, n_tasks)
+
+        Returns
+        -------
+        torch.Tensor
+            _description_
+        """
+        loss = torch.stack(
+            [
+                cumulative_link_loss(
+                    y_preds[task_num],
+                    y_true[:, task_num],
+                    reduction=self.task_reduction,
+                    class_weights=self.class_weights,
+                )
+                for task_num in range(self.n_tasks)
+            ]
+        )
+        return loss.sum()

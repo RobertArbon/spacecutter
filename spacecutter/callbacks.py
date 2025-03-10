@@ -23,6 +23,7 @@ class AscensionCallback(Callback):
     min_val : float, (default=-1e6)
         Minimum value that the smallest cutpoint may take.
     """
+
     def __init__(self, margin: float = 0.0, min_val: float = -1.0e6) -> None:
         super().__init__()
         self.margin = margin
@@ -34,8 +35,7 @@ class AscensionCallback(Callback):
         if isinstance(module, LogisticCumulativeLink):
             cutpoints = module.cutpoints.data
             for i in range(cutpoints.shape[0] - 1):
-                cutpoints[i].clamp_(self.min_val,
-                                    cutpoints[i + 1] - self.margin)
+                cutpoints[i].clamp_(self.min_val, cutpoints[i + 1] - self.margin)
 
     def on_batch_end(self, net: Module, *args, **kwargs) -> None:
         net.module_.apply(self.clip)
