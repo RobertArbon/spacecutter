@@ -66,8 +66,12 @@ def cumulative_link_loss(
     loss: torch.Tensor
 
     """
+    not_nan_ix = ~torch.isnan(y_true).flatten()
+    y_pred = y_pred[not_nan_ix, :]
+    y_true = y_true[not_nan_ix, :]
+    y_true_ord = y_true.to(torch.int64)
     eps = 1e-15
-    likelihoods = torch.clamp(torch.gather(y_pred, 1, y_true), eps, 1 - eps)
+    likelihoods = torch.clamp(torch.gather(y_pred, 1, y_true_ord), eps, 1 - eps)
     neg_log_likelihood = -torch.log(likelihoods)
 
     if class_weights is not None:
@@ -135,12 +139,14 @@ class MultiTaskCumulativeLinkLoss(nn.Module):
     def __init__(
         self,
         n_tasks: int,
+        n_classes_per_task: List[int], 
         loss_reduction: str = 'mean',
         task_reduction: str = "elementwise_mean",
         class_weights: Optional[List[torch.Tensor]] = None,
     ) -> None:
         super().__init__()
         self.n_tasks = n_tasks
+        self.n_classes_per_task = torch.as_tensor(n_classes_per_task)
         self.loss_reduction = loss_reduction
         self.class_weights = class_weights
         self.task_reduction = task_reduction
@@ -174,7 +180,13 @@ class MultiTaskCumulativeLinkLoss(nn.Module):
                 for task_num in range(self.n_tasks)
             ]
         )
+        coefs = 1.0/self.n_classes_per_task
+        tot = coefs.sum()
+        coefs = coefs/tot
         if self.loss_reduction == 'mean':
             return loss.mean()
         elif self.loss_reduction == 'sum':
             return loss.sum()
+        elif self.loss_reduction == 'inv_num_classes':
+            return (coefs*loss).sum() 
+
